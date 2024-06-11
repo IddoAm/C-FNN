@@ -1,0 +1,11 @@
+{
+    "files.associations": {
+        "cmath": "c",
+        "stdlib.h": "c",
+        "mnist_parser.h": "c",
+        "xlocale": "c",
+        "iterator": "c",
+        "xmemory": "c",
+        "math_functions.h": "c"
+    }
+}
