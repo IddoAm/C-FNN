@@ -8,6 +8,8 @@
 
 #include "mnist_parser.h"
 
+#define MINI_BATCH_SIZE 400
+
 
 typedef struct Layer
 {
@@ -49,7 +51,9 @@ void layer_forward_step(Layer* layer, double* input);
 // Network Functions
 void forward_prop(Layer** layers, double* input, int layers_count);
 void backward_prop(Layer** layers, int layers_count, double* target, double* input, double learning_rate);
-void train_network(Layer** layers, int layers_count, double** images, double** labels, int data_count, double learning_rate);
+void accumulate_errors(Layer** layers, int layers_count, double* target);
+void update_variables(Layer** layers, int layers_count, double* input, double learning_rate);
+void train_network(Layer** layers, int layers_count, double** images, double** labels, int data_count, double learning_rate, double dropout_probability);
 double validate_network(Layer** layers, int layers_count, double** images, double** labels, int test_count);
 
 
@@ -89,6 +93,7 @@ int main(int argc, char* argv[]) {
 
     // Set up network
     const double LEARNING_RATE = atof(argv[1]);
+    const double DROPOUT_PROBABILITY = 0.2;
     const int LAYER_COUNT = 1 + argc - 2;
     // +1 for output layer, -2 the program name and learning rate
 
@@ -111,7 +116,7 @@ int main(int argc, char* argv[]) {
     double validate_acc = 0;
 
     for(i = 0; i < 15; i++){
-        train_network(layers, LAYER_COUNT, mnist_train_images, mnist_train_labels, train_image_count, LEARNING_RATE);
+        train_network(layers, LAYER_COUNT, mnist_train_images, mnist_train_labels, train_image_count, LEARNING_RATE, DROPOUT_PROBABILITY);
         validate_acc = validate_network(layers, LAYER_COUNT, mnist_validate_images, mnist_validate_labels, test_image_count);
         printf("Epoch %d finished, acc: %f\n", i+1, validate_acc);
     }
@@ -279,6 +284,61 @@ void forward_prop(Layer** layers, double* input, int layers_count){
     }
 }
 
+/*
+    Used for mini-batches;
+     accumulates all errors given to the error variable in Layer struct.
+*/
+void accumulate_errors(Layer** layers, int layers_count, double* target) {
+
+    double* temp_error = (double*)malloc(layers[layers_count-2]->count * sizeof(double));
+    int i=0, j=0;
+
+    // Mean squared derivative
+    for(i = 0; i < layers[layers_count-1]->count; i++) {
+        layers[layers_count-1]->error[i] += 2 * (layers[layers_count-1]->activations[i] - target[i]) * layers[layers_count-1]->activationFunctionDerivative(layers[layers_count-1]->pre_activations[i]);   
+    }
+    
+    
+    // Propagate error
+    for(i = layers_count - 2; i > 0; i--) {
+        memset(temp_error, 0, layers[i]->count * sizeof(double));
+
+        cblas_dgemv(CblasRowMajor, CblasTrans, layers[i]->count, layers[i+1]->count, 1.0, layers[i+1]->weights, layers[i+1]->count, layers[i+1]->error, 1, 0.0, temp_error, 1);
+        
+        for(j = 0; j < layers[i]->count; j++) {
+            layers[i]->error[j] += temp_error[j] * layers[i]->activationFunctionDerivative(layers[i]->pre_activations[j]);
+        }
+    }
+
+    free(temp_error);
+}
+
+/*
+    Used for mini-batches;
+     Updates the variables of the Layers based on their error values divived by the mini-batch size.
+*/
+void update_variables(Layer** layers, int layers_count, double* input, double learning_rate){
+    int i = 0, j = 0;
+
+    // Update weights and biases
+    for(i = 0; i < layers_count; i++){
+        
+        double* prev_layer_activations = i > 0 ? layers[i-1]->activations : input;
+        // Outer product mult for weights update
+        cblas_dger(CblasRowMajor, layers[i]->count, layers[i-1]->count, -learning_rate, layers[i]->error, 1, prev_layer_activations, 1, layers[i]->weights, layers[i]->prev_count);
+
+
+        // -learning rate * error
+        for(j = 0; j < layers[i]->count; j++){
+            layers[i]->biases[j] -= learning_rate * (layers[i]->error[j]/MINI_BATCH_SIZE);
+        }
+    }
+}
+
+/*
+    Used for SGD;
+     Caculates error and updates variables based on one input.
+*/
 void backward_prop(Layer** layers, int layers_count, double* target, double* input, double learning_rate){
     int i = 0, j = 0;
 
@@ -311,13 +371,15 @@ void backward_prop(Layer** layers, int layers_count, double* target, double* inp
     }
 }
 
-void train_network(Layer** layers, int layers_count, double** images, double** labels, int data_count, double learning_rate){
+void train_network(Layer** layers, int layers_count, double** images, double** labels, int data_count, double learning_rate, double dropout_probability){
     int i = 0;
     clock_t start_time = clock();
     // Train network
     for(i = 0; i < data_count; i++){
+        // Not finished to work with mini-batches yet.
         forward_prop(layers, images[i], layers_count);
-        backward_prop(layers, layers_count, labels[i], images[i], learning_rate);
+        accumulate_errors(layers, layers_count, labels[i]);
+        //backward_prop(layers, layers_count, labels[i], images[i], learning_rate);
     }
 
     clock_t end_time = clock();
